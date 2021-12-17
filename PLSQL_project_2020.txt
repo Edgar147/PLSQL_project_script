@@ -1,0 +1,234 @@
+
+
+--Suppression des tables
+--DROP TABLE DEPARTVOL CASCADE CONSTRAINTS;
+--DROP TABLE EQUIPAGE CASCADE CONSTRAINTS;
+--DROP TABLE VOL CASCADE CONSTRAINTS;
+--DROP TABLE PERSONNEL CASCADE CONSTRAINTS;
+
+
+
+
+--Suppression des modules
+--DROP FUNCTION TotalHeurVolMois;
+--DROP PROCEDURE AffecterPersonnel;
+--DROP PROCEDURE MembresEquipage;
+
+
+--Suppression des sequences
+--DROP SEQUENCE seqAff; 
+--DROP SEQUENCE seqMat; 
+
+
+
+--!!!!!!!!!Pour avoir l'affichage correcte des dates,resultats etc...,comme dans l'example de sujet!!!!!!!!
+alter session set nls_date_format = 'DD/MM/YYYY HH12:MI';         --!!!!!!!!!!!!!EXECUTION OBLIGATOIRE,SINON RESULTATS DES MODULES SONT INCORRECTES!!!!!!!!!!!
+
+
+
+--Creation des tables
+
+create table Vol(noVol varchar2(8) PRIMARY KEY,
+                depart VARCHAR2(30)NOT NULL,
+                arrivee VARCHAR2(30) NOT NULL
+);
+
+create table Personnel(matricule NUMBER(3) primary key,
+                        nom VARCHAR2(30)NOT NULL,
+                        categorie VARCHAR2(30)NOT NULL,
+                        fonction VARCHAR2(30)NOT NULL
+);
+create table DepartVol(noVol VARCHAR2(8) references Vol(noVol),
+                        DateHeureDepart DATE primary key,
+                        dureeVol NUMBER(10)CHECK(dureeVol>=0)
+);
+        
+create table Equipage(noAffectation number(3) primary key,
+                        noVol  VARCHAR2(8) references Vol(noVol),
+                        DateHeureDepart DATE references DepartVol(DateHeureDepart),
+                        matricule NUMBER(3) references Personnel(matricule)
+);
+
+
+
+--Insertion dans la table Vol des donnees
+INSERT INTO Vol(noVol,depart, arrivee) VALUES ('V1','Paris CDG','New York JFK');
+INSERT INTO Vol(noVol,depart, arrivee) VALUES ('V2','Paris CDG','New York JFK');
+
+--Insertion dans la table Vol Personnel des donnees avec la sequence seqMat
+CREATE SEQUENCE seqMat START WITH 101 INCREMENT BY 1 NOCACHE; 
+INSERT INTO Personnel(matricule, nom, categorie,fonction) VALUES (seqMat.NEXTVAL,'Paul','Navigant','Pilote');
+INSERT INTO Personnel(matricule, nom, categorie,fonction) VALUES (seqMat.NEXTVAL,'Pierre','Navigant','Personnel de bord');
+INSERT INTO Personnel(matricule, nom, categorie,fonction) VALUES (seqMat.NEXTVAL,'Durand','Non Navigant','Technicien');
+
+--Insertion dans la table DepartVol des donnees
+INSERT INTO DepartVol(noVol, DateHeureDepart, dureeVol) VALUES ('V1',to_date('31/01/2020 08:00','dd/mm/yyyy hh24:mi'),360);
+INSERT INTO DepartVol(noVol, DateHeureDepart, dureeVol) VALUES ('V1',to_date('14/02/2020 08:00','dd/mm/yyyy hh24:mi'),360);
+INSERT INTO DepartVol(noVol, DateHeureDepart, dureeVol) VALUES ('V1',to_date('21/02/2020 12:00','dd/mm/yyyy hh24:mi'),345);
+
+--Insertion dans la table Equipage  des donnees avec la sequence seqAff
+CREATE SEQUENCE seqAff START WITH 1 INCREMENT BY 1 NOCACHE; 
+INSERT INTO Equipage(noAffectation, noVol, DateHeureDepart,matricule) VALUES (seqAff.NEXTVAL,'V1',to_date('31/01/2020 08:00','dd/mm/yyyy hh24:mi'),102);
+INSERT INTO Equipage(noAffectation, noVol, DateHeureDepart,matricule) VALUES (seqAff.NEXTVAL,'V1',to_date('14/02/2020 08:00','dd/mm/yyyy hh24:mi'),101);
+INSERT INTO Equipage(noAffectation, noVol, DateHeureDepart,matricule) VALUES (seqAff.NEXTVAL,'V1',to_date('14/02/2020 08:00','dd/mm/yyyy hh24:mi'),102);
+INSERT INTO Equipage(noAffectation, noVol, DateHeureDepart,matricule) VALUES (seqAff.NEXTVAL,'V1',to_date('21/02/2020 12:00','dd/mm/yyyy hh24:mi'),101);
+
+
+-------------LES MODULES(Il faut executer 1 par 1)
+
+----------------------------------1
+
+create or replace  PROCEDURE AffecterPersonnel(Mat in number, noVolparam in char, DateHeureDep in Date) 
+IS
+--Declaration des variables
+  v_mat Personnel.matricule%TYPE;
+  v_noVol Vol.noVol%TYPE;
+  v_date DepartVol.DateHeureDepart%TYPE;
+  nbLigne NUMBER;
+--Initialisation des exceptions de matricule et de noVol,avec le code 100,qui est le code de NO_DATA_FOUND
+  excep_mat  EXCEPTION; 
+         PRAGMA EXCEPTION_INIT(excep_mat, 100);
+  excep_volDate  EXCEPTION; 
+         PRAGMA EXCEPTION_INIT(excep_volDate, 100);
+BEGIN
+
+--Si personnel existe et si il est Navigant
+SELECT matricule INTO v_mat FROM Personnel WHERE matricule=Mat and categorie='Navigant';
+
+--Si v_mat est vide,on appel l'exception dédié,pas besoin de continuer
+if(v_mat='') then
+    RAISE excep_mat;
+else 
+            --Si le matricule existe=>les conditions pour le matricule sont ok,on continue pour le  noVol
+            --Depart de vol programmé <=> Vérifier,si pour un vol donnée on a DateHeureDep => donc voir si on a noVol&DateHeureDep  dans le tableau DepartVol
+            SELECT noVol,DateHeureDepart INTO v_noVol,v_date FROM DEPARTVOL WHERE noVol=noVolparam and DateHeureDepart=DateHeureDep;
+            --Si noVol et date n'existe pas pour nos contitions,on appele l'exception
+                if((v_noVol='')or (v_date='')) then
+                     RAISE excep_volDate;
+                else
+                            --On verifie si le personnel déjà affecté à un autre départ de vol à la même date et heure,donc si on 
+                            --a 1 et plus de lignes =>donc il est affecté a plusieurs vols à la même date.
+                                SELECT COUNT(*) INTO nbLigne  FROM Equipage WHERE  DateHeureDepart=DateHeureDep and matricule=Mat and noVolparam<>noVol;
+                                 if(nbLigne>0)then--donc il y a une resultat,ce qui n'est pas bien => on lance le message d'erreur
+                                            RAISE_APPLICATION_ERROR(-20005,'La même personnel est affecté pour la mêma date aux differentes vols');
+                                 else
+                                 --Si on est là => tout est ok,on effectue les insertions
+                                        INSERT INTO Equipage (noAffectation, noVol, DateHeureDepart, matricule) VALUES (seqAff.NEXTVAL,noVolparam,DateHeureDep, Mat);
+                                  end if;
+                 end if;
+end if;
+
+EXCEPTION
+WHEN excep_volDate or excep_mat   THEN
+--Si exceptions sont appelées,on entre ici
+DBMS_OUTPUT.PUT_LINE('Donnes inexistants ... ');	
+	WHEN OTHERS THEN
+DBMS_OUTPUT.PUT_LINE('Erreur Oracle : '||sqlcode||' ; Message Oracle : '||sqlerrm);
+
+
+END;
+
+--execute AffecterPersonnel('101','V1',  to_date('14/02/2020 08:00','dd/mm/yyyy hh24:mi'));
+
+
+
+------------------------------------------2
+
+create or replace  FUNCTION TotalHeurVolMois(Mat in number, Mois in char) return number 
+is
+--Declaration des variables
+n number;
+nbLigneDate number;
+nbLigneMat number;
+
+--SELECT DATEPART(yy, DateVal) into v_mois;
+begin
+nbLigneMat:=0;
+select count(*) into nbLigneMat from equipage where matricule=Mat;
+--Si le Matricule demandé n'existe pas l'equipage,on aura moins qu'une ligne(donc le matricule donnée n'existe pas)
+if(nbLigneMat<1) then
+--Dans ce cas,on retourne -1,comme dans lexemple de sujet
+    return -1;
+else
+--si tout est ok avec le matricule,on verifie l'existance de mois donnée
+                    nbLigneDate:=0;
+                    select count(*) into nbLigneDate from equipage where SUBSTR(DateHeureDepart,4,7)=Mois;
+                    if(nbLigneDate<1) then
+                    --Si le mois demandé n'existe pas,on aura moins qu'une ligne(donc le mois donnée n'existe pas)
+                         return 0;--comme dans l'example de sujet
+                    else
+                        --Si on est entré ici,tout est ok, on met dans n la somme des durées qui satisfaient les conditions 
+                                select sum(dureevol)
+                                INTO n
+                                FROM  departvol d,equipage e
+                                where e.matricule=Mat and  SUBSTR(e.DateHeureDepart,4,7)=Mois and d.DateHeureDepart=e.DateHeureDepart;
+                                return n/60; --On divise sur 60 pour avoir les heures à la place des minutes
+                    end if;
+end if;
+EXCEPTION
+	WHEN NO_DATA_FOUND THEN
+	DBMS_OUTPUT.PUT_LINE ('Données inexistantes');
+	RETURN(-1);
+	WHEN OTHERS THEN
+	DBMS_OUTPUT.PUT_LINE('Erreur Oracle : '||sqlcode||' ; Message Oracle : '||sqlerrm);
+	RETURN(-1);	
+END;
+
+--SELECT TotalHeurVolMois(101,'02/2020') FROM Dual;
+--SELECT TotalHeurVolMois(102, '04/2020') FROM Dual; 
+--SELECT TotalHeurVolMois(103, '01/2020') FROM Dual;
+
+
+
+
+--------------------------------------3
+
+create or replace  PROCEDURE MembresEquipage(noVolparam in char, DateHeureDep in date)  
+ IS
+ --Declaration des variables
+   v_mat Equipage.matricule%TYPE;
+   v_nom Personnel.nom%TYPE;
+   v_fonction Personnel.fonction%TYPE;
+   v_noVol Vol.noVol%TYPE;
+   v_date DepartVol.DateHeureDepart%TYPE;
+   
+   nbLigne number;
+   total number;
+   --excep_volDate  EXCEPTION; 
+         --PRAGMA EXCEPTION_INIT(excep_volDate, 100);
+--Creation de courseur: on aura les lignes d'après les conditions demandées 
+CURSOR C is select p.matricule,p.nom,p.fonction from equipage e,personnel p where e.noVol=noVolparam and e.DateHeureDepart=DateHeureDep and e.matricule=p.matricule;
+
+BEGIN
+
+--Si les conditions demandés ne sont pas satisfaisants,on aura moins qu'une ligne(donc l'info est faux)
+ select count(*) INTO nbLigne FROM EQUIPAGE WHERE noVol=noVolparam and DateHeureDepart=DateHeureDep;
+--Si noVol et date n'existent pas pour nos contitions,on appele l'exception
+if(nbLigne<1)then
+        --ON informe avec le message d'erreur,que les valeurs(DateHeureDep&noVol sont inexistants);
+         RAISE_APPLICATION_ERROR(-20006,'Erreur:Les données sont introuvables');
+
+ else
+
+        --On utilise le courseur 
+        --Initialisation de total ,pour recuperer heures de mois total 
+        total:=0;
+         OPEN C; 
+           LOOP 
+           --Pour chaque ligne de requete de courseur C, on recupère les valeurs avec v_mat,v_nom,v_fonction
+           FETCH C into v_mat,v_nom,v_fonction; 
+              EXIT WHEN C%notfound; 
+                 total:=totalheurvolmois(v_mat,SUBSTR(DateHeureDep,4,7)); --On appele le total des heures avec l'appele à la fonction  totalheurvolmois
+              dbms_output.put_line(v_mat ||' - '|| v_nom  ||' - '||v_fonction ||' - '|| total); 
+           END LOOP; 
+           CLOSE C; 
+end if;
+EXCEPTION
+    WHEN NO_DATA_FOUND  THEN
+        DBMS_OUTPUT.PUT_LINE('Donnes inexistants : ');	
+	WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Erreur Oracle : '||sqlcode||' ; Message Oracle : '||sqlerrm);
+END;
+
+--EXECUTE MembresEquipage('V1', to_date('14/02/2020 08:00','dd/mm/yyyy hh24:mi'));
+
